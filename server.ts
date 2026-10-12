@@ -13,9 +13,11 @@ import type { DiscordAccount, AutopostChannel, DashboardStats } from './src/type
 dotenv.config();
 
 const app = express();
+// Detect dev vs production environment
+const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--port');
 // Development environment must always listen on port 3000
-const isProduction = process.env.NODE_ENV === 'production';
-const PORT = isProduction && process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+// Production (Cloud Run / Published site) must listen on process.env.PORT (typically 8080)
+const PORT = isDev ? 3000 : (process.env.PORT ? parseInt(process.env.PORT, 10) : 3000);
 
 app.use(express.json());
 
@@ -480,9 +482,9 @@ async function startServer() {
   scheduler.init();
 
   const distIndex = path.resolve(process.cwd(), 'dist', 'index.html');
-  const isProd = process.env.NODE_ENV === 'production' || (fs.existsSync(distIndex) && process.env.NODE_ENV !== 'development');
+  const isProd = !isDev && fs.existsSync(distIndex);
 
-  if (isProd && fs.existsSync(distIndex)) {
+  if (isProd) {
     app.use(express.static(path.resolve(process.cwd(), 'dist')));
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(distIndex);

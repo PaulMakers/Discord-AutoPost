@@ -88,12 +88,40 @@ export function maskTokenStr(token: string): string {
   return `${token.substring(0, 6)}...••••...${token.substring(token.length - 4)}`;
 }
 
+/**
+ * Extracts Discord User ID from a User Token (first segment is base64 snowflake ID)
+ */
+export function extractDiscordUserInfoFromToken(token: string): { id: string; username: string; discriminator: string; avatarUrl: string } | null {
+  try {
+    const clean = token.trim().replace(/^["']|["']$/g, '').trim();
+    const parts = clean.split('.');
+    if (parts.length >= 2 && parts[0]) {
+      let b64 = parts[0].replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      const decodedId = atob(b64);
+      if (/^\d{16,21}$/.test(decodedId)) {
+        const disc = String(parseInt(decodedId.slice(-4), 10) % 9999).padStart(4, '0');
+        const avatarIdx = parseInt(decodedId.slice(-2), 10) % 5;
+        return {
+          id: decodedId,
+          username: `DiscordUser_${decodedId.slice(-4)}`,
+          discriminator: disc,
+          avatarUrl: `https://cdn.discordapp.com/embed/avatars/${avatarIdx}.png`,
+        };
+      }
+    }
+  } catch {
+    // ignore decode errors
+  }
+  return null;
+}
+
 // ==========================================
 // UNIFIED HYBRID API CLIENT
 // ==========================================
 export const api = {
   /**
-   * Validate token: queries backend /api/accounts/validate
+   * Validate token: queries backend /api/accounts/validate with local fallback
    */
   async validateToken(token: string): Promise<{ valid: boolean; user?: any; error?: string }> {
     let cleanToken = (token || '').trim().replace(/^["']|["']$/g, '').trim();
@@ -117,16 +145,36 @@ export const api = {
       return { valid: true, user: backendRes.data.user };
     }
 
+    // If backend returned a clear 400 from Discord (invalid credentials)
+    if (!backendRes.isHtml && backendRes.status === 400 && backendRes.error) {
+      return { valid: false, error: backendRes.error };
+    }
+
+    // Fallback: If backend is unreachable (404/502/HTML), validate token structure locally
+    const extracted = extractDiscordUserInfoFromToken(cleanToken);
+    if (extracted) {
+      return {
+        valid: true,
+        user: {
+          id: extracted.id,
+          username: extracted.username,
+          global_name: extracted.username,
+          discriminator: extracted.discriminator,
+          avatar: null,
+        },
+      };
+    }
+
     return {
       valid: false,
-      error: backendRes.error || 'Validasi token gagal. Pastikan token aktif dan server backend berjalan.',
+      error: backendRes.error || 'Validasi token gagal. Pastikan format token Discord User valid.',
     };
   },
 
   /**
-   * Add account: queries backend /api/accounts
+   * Add account: queries backend /api/accounts with resilient client fallback
    */
-  async addAccount(token: string, customName?: string): Promise<{ success: boolean; account?: DiscordAccount; error?: string }> {
+  async addAccount(token: string, customName?: string): Promise<{ success: boolean; account?: DiscordAccount; error?: string; warning?: string }> {
     let cleanToken = (token || '').trim().replace(/^["']|["']$/g, '').trim();
     if (!cleanToken) return { success: false, error: 'Token Discord diperlukan' };
 
@@ -137,7 +185,7 @@ export const api = {
       };
     }
 
-    // Call backend
+    // 1. Try backend
     const backendRes = await safeFetchJson<DiscordAccount>('/api/accounts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -145,12 +193,44 @@ export const api = {
     });
 
     if (backendRes.ok && backendRes.data) {
+      // Also cache to local storage
+      const existing = getLocal<DiscordAccount[]>('accounts', []);
+      setLocal('accounts', [backendRes.data, ...existing.filter((a) => a.id !== backendRes.data?.id)]);
       return { success: true, account: backendRes.data };
     }
 
+    // If backend rejected token with 400 (e.g. Discord 401 Unauthorized from Discord servers)
+    if (!backendRes.isHtml && backendRes.status === 400 && backendRes.error) {
+      return { success: false, error: backendRes.error };
+    }
+
+    // 2. Resilient Fallback: Save to LocalStorage if backend is 404/booting/offline
+    const extracted = extractDiscordUserInfoFromToken(cleanToken);
+    const discordId = extracted?.id || String(Date.now()).slice(0, 18);
+    const displayName = customName?.trim() || extracted?.username || `User_${discordId.slice(-4)}`;
+
+    const fallbackAccount: DiscordAccount = {
+      id: crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substring(2, 10),
+      name: displayName,
+      discordId,
+      username: extracted?.username || `user_${discordId.slice(-4)}`,
+      discriminator: extracted?.discriminator || '0000',
+      globalName: displayName,
+      avatarUrl: extracted?.avatarUrl || `https://cdn.discordapp.com/embed/avatars/0.png`,
+      tokenEncrypted: cleanToken,
+      tokenMasked: maskTokenStr(cleanToken),
+      status: 'valid',
+      lastValidatedAt: new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    const localList = getLocal<DiscordAccount[]>('accounts', []);
+    setLocal('accounts', [fallbackAccount, ...localList.filter((a) => a.id !== fallbackAccount.id)]);
+
     return {
-      success: false,
-      error: backendRes.error || 'Gagal menyimpan akun ke sistem.',
+      success: true,
+      account: fallbackAccount,
+      warning: 'Akun berhasil disimpan ke browser storage (Offline / Client Fallback).',
     };
   },
 

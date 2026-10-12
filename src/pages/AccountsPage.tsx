@@ -94,7 +94,11 @@ export function AccountsPage({
         throw new Error(result.error || 'Gagal menyimpan akun');
       }
 
-      success('AKUN DISIMPAN', `Akun ${result.account.name} berhasil disimpan dan aktif.`);
+      if (result.warning) {
+        success('AKUN DISIMPAN', `Akun ${result.account.name} berhasil disimpan (${result.warning})`);
+      } else {
+        success('AKUN DISIMPAN', `Akun ${result.account.name} berhasil disimpan dan aktif.`);
+      }
       setTokenInput('');
       setCustomName('');
       setValidatedUser(null);

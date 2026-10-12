@@ -16,6 +16,7 @@ import type {
   AppSettings,
   DashboardStats,
 } from './types/index.ts';
+import { api } from './services/api.ts';
 
 function AppContent() {
   const { success, error, info } = useToast();
@@ -36,19 +37,17 @@ function AppContent() {
   const fetchData = useCallback(async (showSpinner = false) => {
     if (showSpinner) setIsLoading(true);
     try {
-      const [statsRes, accountsRes, channelsRes, logsRes, settingsRes] = await Promise.all([
-        fetch('/api/stats').then((r) => r.json()),
-        fetch('/api/accounts').then((r) => r.json()),
-        fetch('/api/channels').then((r) => r.json()),
-        fetch('/api/logs?limit=150').then((r) => r.json()),
-        fetch('/api/settings').then((r) => r.json()),
+      const [statsRes, accountsRes, channelsRes, logsRes] = await Promise.all([
+        api.getStats(),
+        api.getAccounts(),
+        api.getChannels(),
+        api.getLogs(),
       ]);
 
-      if (statsRes && !statsRes.error) setStats(statsRes);
+      if (statsRes) setStats(statsRes);
       if (Array.isArray(accountsRes)) setAccounts(accountsRes);
       if (Array.isArray(channelsRes)) setChannels(channelsRes);
       if (Array.isArray(logsRes)) setLogs(logsRes);
-      if (settingsRes && !settingsRes.error) setSettings(settingsRes);
     } catch (err) {
       console.error('Failed to fetch data:', err);
     } finally {
@@ -72,13 +71,9 @@ function AppContent() {
   // Global Start All
   const handleStartAll = async () => {
     try {
-      const res = await fetch('/api/channels/start-all', { method: 'POST' });
-      if (res.ok) {
-        success('Semua Channel Dimulai', 'Autopost diaktifkan untuk seluruh channel target.');
-        fetchData(false);
-      } else {
-        error('Gagal', 'Terjadi kesalahan saat memulai semua channel.');
-      }
+      await api.startAll();
+      success('Semua Channel Dimulai', 'Autopost diaktifkan untuk seluruh channel target.');
+      fetchData(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       error('Error', msg);
@@ -88,13 +83,9 @@ function AppContent() {
   // Global Stop All
   const handleStopAll = async () => {
     try {
-      const res = await fetch('/api/channels/stop-all', { method: 'POST' });
-      if (res.ok) {
-        info('Semua Channel Dihentikan', 'Autopost dinonaktifkan untuk seluruh channel.');
-        fetchData(false);
-      } else {
-        error('Gagal', 'Terjadi kesalahan saat menghentikan semua channel.');
-      }
+      await api.stopAll();
+      info('Semua Channel Dihentikan', 'Autopost dinonaktifkan untuk seluruh channel.');
+      fetchData(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       error('Error', msg);
@@ -104,21 +95,12 @@ function AppContent() {
   // Toggle single channel
   const handleToggleChannel = async (id: string) => {
     try {
-      const res = await fetch(`/api/channels/${id}/toggle`, { method: 'POST' });
-      const data = await res.json();
-      if (res.ok) {
-        if (data.isActive) {
-          success('Channel Aktif', `Channel "${data.name}" mulai berjalan.`);
-        } else {
-          info('Channel Berhenti', `Channel "${data.name}" dihentikan.`);
-        }
-        fetchData(false);
-      } else {
-        error('Gagal Mengubah Status', data.error || 'Terjadi kesalahan');
-      }
+      await api.toggleChannel(id);
+      success('Status Diperbarui', 'Status channel berhasil diubah.');
+      fetchData(false);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      error('Error', msg);
+      error('Gagal Mengubah Status', msg);
     }
   };
 
@@ -127,13 +109,12 @@ function AppContent() {
     try {
       const target = channels.find((c) => c.id === id);
       info('Mengirim Pesan...', `Mencoba mengirim pesan ke channel "${target?.name || id}"`);
-      const res = await fetch(`/api/channels/${id}/send-now`, { method: 'POST' });
-      const data = await res.json();
-      if (res.ok && data.success) {
-        success('Terkirim!', data.message || 'Pesan berhasil diposting ke Discord.');
+      const result = await api.sendNow(id);
+      if (result.success) {
+        success('Terkirim!', result.message || 'Pesan berhasil diposting ke Discord.');
         fetchData(false);
       } else {
-        error('Gagal Mengirim', data.error || 'Pesan gagal terkirim');
+        error('Gagal Mengirim', result.error || 'Pesan gagal terkirim');
         fetchData(false);
       }
     } catch (err: unknown) {
@@ -144,11 +125,13 @@ function AppContent() {
 
   // Clear all logs
   const handleClearLogs = async () => {
-    const res = await fetch('/api/logs', { method: 'DELETE' });
-    if (!res.ok) {
-      throw new Error('Gagal membersihkan log');
+    try {
+      await api.clearLogs();
+      fetchData(false);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      error('Error', msg);
     }
-    fetchData(false);
   };
 
   return (

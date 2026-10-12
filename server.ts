@@ -1,6 +1,7 @@
 import express from 'express';
 import type { Request, Response } from 'express';
 import path from 'node:path';
+import fs from 'node:fs';
 import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 import { db } from './src/server/db.ts';
@@ -12,9 +13,22 @@ import type { DiscordAccount, AutopostChannel, DashboardStats } from './src/type
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+// Development environment must always listen on port 3000
+const isProduction = process.env.NODE_ENV === 'production';
+const PORT = isProduction && process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json());
+
+// Enable CORS for all origins and methods
+app.use((_req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  if (_req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 // ==========================================
 // API ROUTES
@@ -66,12 +80,17 @@ app.get('/api/accounts', (_req: Request, res: Response) => {
 
 // Validate token before adding
 app.post('/api/accounts/validate', async (req: Request, res: Response) => {
-  const { token } = req.body;
-  if (!token || typeof token !== 'string') {
+  const rawToken = req.body?.token;
+  if (!rawToken || typeof rawToken !== 'string') {
     return res.status(400).json({ error: 'Token Discord wajib diisi' });
   }
 
-  const result = await validateDiscordToken(token);
+  const cleanToken = rawToken.trim().replace(/^["']|["']$/g, '').trim();
+  if (!cleanToken) {
+    return res.status(400).json({ error: 'Token Discord tidak boleh kosong' });
+  }
+
+  const result = await validateDiscordToken(cleanToken);
   if (!result.valid || !result.user) {
     return res.status(400).json({ error: result.error || 'Token tidak valid' });
   }
@@ -84,12 +103,17 @@ app.post('/api/accounts/validate', async (req: Request, res: Response) => {
 
 // Add new account
 app.post('/api/accounts', async (req: Request, res: Response) => {
-  const { token, customName } = req.body;
-  if (!token || typeof token !== 'string') {
+  const { token: rawToken, customName } = req.body;
+  if (!rawToken || typeof rawToken !== 'string') {
     return res.status(400).json({ error: 'Token Discord diperlukan' });
   }
 
-  const check = await validateDiscordToken(token);
+  const cleanToken = rawToken.trim().replace(/^["']|["']$/g, '').trim();
+  if (!cleanToken) {
+    return res.status(400).json({ error: 'Token Discord tidak boleh kosong' });
+  }
+
+  const check = await validateDiscordToken(cleanToken);
   if (!check.valid || !check.user) {
     return res.status(400).json({ error: check.error || 'Token tidak valid' });
   }
@@ -99,8 +123,8 @@ app.post('/api/accounts', async (req: Request, res: Response) => {
     ? `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`
     : `https://cdn.discordapp.com/embed/avatars/${parseInt(user.discriminator || '0', 10) % 5}.png`;
 
-  const encrypted = encryptToken(token);
-  const masked = maskToken(token);
+  const encrypted = encryptToken(cleanToken);
+  const masked = maskToken(cleanToken);
 
   const newAccount: DiscordAccount = {
     id: crypto.randomUUID(),
@@ -430,6 +454,20 @@ app.put('/api/settings', (req: Request, res: Response) => {
   res.json(updated);
 });
 
+// 404 handler for unmatched API routes - ALWAYS JSON, NEVER HTML
+app.all('/api/*', (_req: Request, res: Response) => {
+  res.status(404).json({ error: 'Endpoint API tidak ditemukan (404)' });
+});
+
+// Global error handler - ALWAYS JSON, NEVER HTML
+app.use((err: any, _req: Request, res: Response, _next: any) => {
+  console.error('Server error:', err);
+  if (err instanceof SyntaxError && 'body' in err) {
+    return res.status(400).json({ error: 'Format JSON payload tidak valid' });
+  }
+  return res.status(500).json({ error: err?.message || 'Internal Server Error' });
+});
+
 // ==========================================
 // VITE / STATIC SERVE SETUP
 // ==========================================
@@ -441,15 +479,21 @@ async function startServer() {
   // Initialize node-cron background scheduler
   scheduler.init();
 
-  if (process.env.NODE_ENV === 'production') {
+  const distIndex = path.resolve(process.cwd(), 'dist', 'index.html');
+  const isProd = process.env.NODE_ENV === 'production' || (fs.existsSync(distIndex) && process.env.NODE_ENV !== 'development');
+
+  if (isProd && fs.existsSync(distIndex)) {
     app.use(express.static(path.resolve(process.cwd(), 'dist')));
     app.get('*', (_req: Request, res: Response) => {
-      res.sendFile(path.resolve(process.cwd(), 'dist', 'index.html'));
+      res.sendFile(distIndex);
     });
   } else {
     const { createServer } = await import('vite');
     const vite = await createServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: false,
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);

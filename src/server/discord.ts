@@ -34,9 +34,16 @@ export async function validateDiscordToken(rawToken: string): Promise<{
   user?: DiscordUserResponse;
   error?: string;
 }> {
-  const cleanToken = rawToken.trim();
+  let cleanToken = (rawToken || '').trim().replace(/^["']|["']$/g, '').trim();
   if (!cleanToken) {
-    return { valid: false, error: 'Token tidak boleh kosong' };
+    return { valid: false, error: 'Token Discord tidak boleh kosong' };
+  }
+
+  if (cleanToken.toLowerCase().startsWith('bot ')) {
+    return {
+      valid: false,
+      error: 'Token berawalan "Bot ". Aplikasi ini menggunakan Discord USER Token (bukan Bot Token).',
+    };
   }
 
   try {
@@ -45,21 +52,39 @@ export async function validateDiscordToken(rawToken: string): Promise<{
       headers: {
         Authorization: cleanToken,
         'User-Agent': USER_AGENT,
+        Accept: 'application/json',
       },
     });
 
     if (res.status === 200) {
-      const data = (await res.json()) as DiscordUserResponse;
+      try {
+        const data = (await res.json()) as DiscordUserResponse;
+        if (data && data.id) {
+          return {
+            valid: true,
+            user: data,
+          };
+        }
+      } catch {
+        return {
+          valid: false,
+          error: 'Respon profil Discord tidak valid (bukan JSON)',
+        };
+      }
+    }
+
+    if (res.status === 401 || res.status === 403) {
       return {
-        valid: true,
-        user: data,
+        valid: false,
+        error: 'Token tidak valid atau telah kadaluarsa (HTTP 401/403 Unauthorized). Silakan periksa kembali User Token Anda.',
       };
     }
 
-    if (res.status === 401) {
+    if (res.status === 400) {
+      const errData = (await res.json().catch(() => ({}))) as { message?: string };
       return {
         valid: false,
-        error: 'Token tidak valid atau telah kadaluarsa (HTTP 401 Unauthorized)',
+        error: `Discord menolak token: ${errData.message || 'Format token salah'} (HTTP 400)`,
       };
     }
 
@@ -70,10 +95,10 @@ export async function validateDiscordToken(rawToken: string): Promise<{
       };
     }
 
-    const text = await res.text();
+    const text = await res.text().catch(() => '');
     return {
       valid: false,
-      error: `Discord error (${res.status}): ${text.substring(0, 100)}`,
+      error: `Discord error (${res.status}): ${text.substring(0, 100) || 'Unknown response'}`,
     };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

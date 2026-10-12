@@ -112,11 +112,12 @@ class SQLiteDatabaseManager {
     if (!this.db || this.isSaving) return;
     this.isSaving = true;
     try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
       const data = this.db.export();
       const buffer = Buffer.from(data);
-      const tempPath = `${SQLITE_FILE}.tmp`;
-      fs.writeFileSync(tempPath, buffer);
-      fs.renameSync(tempPath, SQLITE_FILE);
+      fs.writeFileSync(SQLITE_FILE, buffer);
     } catch (err) {
       console.error('Failed to save SQLite file to disk:', err);
     } finally {
@@ -291,7 +292,7 @@ class SQLiteDatabaseManager {
     return channel;
   }
 
-  public updateChannel(id: string, updates: Partial<AutopostChannel>): AutopostChannel | undefined {
+  public updateChannel(id: string, updates: Partial<AutopostChannel>, persist = true): AutopostChannel | undefined {
     const existing = this.getChannel(id);
     if (!existing || !this.db) return undefined;
 
@@ -325,7 +326,9 @@ class SQLiteDatabaseManager {
         id,
       ]
     );
-    this.saveToFile();
+    if (persist) {
+      this.saveToFile();
+    }
     return m;
   }
 

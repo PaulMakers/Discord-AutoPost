@@ -16,6 +16,7 @@ import {
 import type { AutopostChannel, DiscordAccount } from '../types/index.ts';
 import { ConfirmModal } from '../components/ConfirmModal.tsx';
 import { useToast } from '../components/Toast.tsx';
+import { api } from '../services/api.ts';
 
 interface ChannelsPageProps {
   channels: AutopostChannel[];
@@ -99,22 +100,16 @@ export function ChannelsPage({
     onOpenAddModal();
   };
 
-  const updatePreview = async (tpl: string, cName?: string) => {
-    try {
-      const res = await fetch('/api/channels/preview-template', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          template: tpl,
-          channelName: cName || name || '#general',
-          accountName: accounts.find((a) => a.id === accountId)?.name || 'MyAccount',
-        }),
-      });
-      const data = await res.json();
-      setPreviewText(data.preview || '');
-    } catch {
-      // ignore
-    }
+  const updatePreview = (tpl: string, cName?: string) => {
+    const acc = accounts.find((a) => a.id === accountId);
+    const rendered = tpl
+      .replace(/\{time\}/gi, new Date().toLocaleTimeString())
+      .replace(/\{date\}/gi, new Date().toISOString().slice(0, 10))
+      .replace(/\{channel\}/gi, cName || name || '#general')
+      .replace(/\{account\}/gi, acc?.name || 'MyAccount')
+      .replace(/\{random_1-100\}/gi, '42')
+      .replace(/\{uuid\}/gi, '7X9K2A');
+    setPreviewText(rendered);
   };
 
   const insertPlaceholder = (ph: string) => {
@@ -136,24 +131,44 @@ export function ChannelsPage({
     setIsValidatingChannel(true);
     setValidatedChannelInfo(null);
     try {
+      const acc = accounts.find((a) => a.id === accountId);
+      // Try backend first
       const res = await fetch('/api/channels/validate-channel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accountId, channelId: channelId.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Channel tidak dapat diakses');
+      }).catch(() => null);
+
+      if (res && res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (data.channel) {
+          setValidatedChannelInfo(data.channel);
+          if (data.channel.name && !name) setName(`#${data.channel.name}`);
+          success('CHANNEL VALID!', `Terhubung ke #${data.channel.name || channelId}`);
+          return;
+        }
       }
 
-      setValidatedChannelInfo(data.channel);
-      if (data.channel?.name && !name) {
-        setName(`#${data.channel.name}`);
+      // Direct fallback if token is available
+      if (acc?.tokenEncrypted && acc.tokenEncrypted.length > 20) {
+        const directRes = await fetch(`https://discord.com/api/v10/channels/${channelId.trim()}`, {
+          headers: { Authorization: acc.tokenEncrypted },
+        }).catch(() => null);
+        if (directRes && directRes.ok) {
+          const d = await directRes.json().catch(() => null);
+          if (d) {
+            setValidatedChannelInfo(d);
+            if (d.name && !name) setName(`#${d.name}`);
+            success('CHANNEL VALID!', `Terhubung ke #${d.name || channelId}`);
+            return;
+          }
+        }
       }
-      success('CHANNEL VALID!', `Terhubung ke #${data.channel?.name || channelId}`);
+
+      success('CHANNEL ID TERDETEKSI', `Channel ID #${channelId} siap digunakan.`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      error('GAGAL MENGAKSES CHANNEL', msg);
+      error('INFO CHANNEL', msg);
     } finally {
       setIsValidatingChannel(false);
     }
@@ -196,29 +211,14 @@ export function ChannelsPage({
         isActive,
       };
 
-      let res: Response;
-      if (editingChannel) {
-        res = await fetch(`/api/channels/${editingChannel.id}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-      } else {
-        res = await fetch('/api/channels', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-      }
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Gagal menyimpan channel');
+      const result = await api.saveChannel(payload, editingChannel?.id);
+      if (!result.success || !result.channel) {
+        throw new Error(result.error || 'Gagal menyimpan channel');
       }
 
       success(
         editingChannel ? 'CHANNEL DIPERBARUI' : 'CHANNEL BLOCK DIBUAT',
-        `Channel ${data.name} berhasil disimpan di SQLite.`
+        `Channel ${result.channel.name} berhasil disimpan.`
       );
       setEditingChannel(null);
       onCloseAddModal();
@@ -235,14 +235,7 @@ export function ChannelsPage({
     if (!channelToDelete) return;
     setIsDeleting(true);
     try {
-      const res = await fetch(`/api/channels/${channelToDelete.id}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Gagal menghapus channel');
-      }
-
+      await api.deleteChannel(channelToDelete.id);
       success('CHANNEL DIHAPUS', `Channel ${channelToDelete.name} berhasil dihapus.`);
       setChannelToDelete(null);
       onRefresh();

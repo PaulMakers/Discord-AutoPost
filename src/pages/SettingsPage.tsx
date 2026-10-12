@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type { AppSettings } from '../types/index.ts';
 import { useToast } from '../components/Toast.tsx';
+import { api } from '../services/api.ts';
 
 interface SettingsPageProps {
   settings: AppSettings | null;
@@ -39,17 +40,13 @@ export function SettingsPage({ settings, onRefresh }: SettingsPageProps) {
     e.preventDefault();
     setIsSaving(true);
     try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          globalPause,
-          autoRetryOnRateLimit,
-          maxLogsLimit: Number(maxLogsLimit) || 500,
-        }),
+      const res = await api.updateSettings({
+        globalPause,
+        autoRetryOnRateLimit,
+        maxLogsLimit: Number(maxLogsLimit) || 500,
       });
-      if (!res.ok) {
-        throw new Error('Gagal menyimpan pengaturan');
+      if (!res.success) {
+        throw new Error(res.error || 'Gagal menyimpan pengaturan');
       }
       success('PENGATURAN DISIMPAN', 'Konfigurasi scheduler di SQLite berhasil diperbarui.');
       onRefresh();

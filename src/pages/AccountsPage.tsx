@@ -18,6 +18,7 @@ import {
 import type { DiscordAccount } from '../types/index.ts';
 import { ConfirmModal } from '../components/ConfirmModal.tsx';
 import { useToast } from '../components/Toast.tsx';
+import { api } from '../services/api.ts';
 
 interface AccountsPageProps {
   accounts: DiscordAccount[];
@@ -64,18 +65,13 @@ export function AccountsPage({
     setIsValidating(true);
     setValidatedUser(null);
     try {
-      const res = await fetch('/api/accounts/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: tokenInput.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Token tidak valid');
+      const res = await api.validateToken(tokenInput.trim());
+      if (!res.valid || !res.user) {
+        throw new Error(res.error || 'Token tidak valid');
       }
 
-      setValidatedUser(data.user);
-      success('TOKEN VALID!', `Terdeteksi akun: ${data.user.global_name || data.user.username}`);
+      setValidatedUser(res.user);
+      success('TOKEN VALID!', `Terdeteksi akun: ${res.user.global_name || res.user.username}`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       error('VALIDASI GAGAL', msg);
@@ -93,20 +89,12 @@ export function AccountsPage({
 
     setIsSubmitting(true);
     try {
-      const res = await fetch('/api/accounts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token: tokenInput.trim(),
-          customName: customName.trim() || undefined,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Gagal menyimpan akun');
+      const result = await api.addAccount(tokenInput.trim(), customName.trim());
+      if (!result.success || !result.account) {
+        throw new Error(result.error || 'Gagal menyimpan akun');
       }
 
-      success('AKUN DISIMPAN', `Akun ${data.name} berhasil disimpan dan token terenkripsi AES-256.`);
+      success('AKUN DISIMPAN', `Akun ${result.account.name} berhasil disimpan dan aktif.`);
       setTokenInput('');
       setCustomName('');
       setValidatedUser(null);
@@ -123,11 +111,8 @@ export function AccountsPage({
   const handleRevalidate = async (acc: DiscordAccount) => {
     setRevalidatingId(acc.id);
     try {
-      const res = await fetch(`/api/accounts/${acc.id}/revalidate`, {
-        method: 'POST',
-      });
-      const data = await res.json();
-      if (!res.ok) {
+      const data = await api.revalidateAccount(acc.id);
+      if (!data.success) {
         throw new Error(data.error || 'Gagal revalidasi');
       }
 
@@ -149,14 +134,7 @@ export function AccountsPage({
     if (!accountToDelete) return;
     setIsDeleting(true);
     try {
-      const res = await fetch(`/api/accounts/${accountToDelete.id}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || 'Gagal menghapus');
-      }
-
+      await api.deleteAccount(accountToDelete.id);
       success('AKUN DIHAPUS', `Akun ${accountToDelete.name} berhasil dihapus.`);
       setAccountToDelete(null);
       onRefresh();
@@ -419,7 +397,9 @@ export function AccountsPage({
                     type={showToken ? 'text' : 'password'}
                     value={tokenInput}
                     onChange={(e) => {
-                      setTokenInput(e.target.value);
+                      const raw = e.target.value;
+                      const cleaned = raw.replace(/^["']|["']$/g, '').trim();
+                      setTokenInput(cleaned);
                       setValidatedUser(null);
                     }}
                     placeholder="Contoh: MTI5OTA5Mjg0Nzk1..."

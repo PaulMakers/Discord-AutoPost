@@ -75,10 +75,14 @@ class AutopostBridgeScheduler {
   private syncHeartbeat(): void {
     const tasks = modularScheduler.getAllTasks();
     for (const t of tasks) {
-      db.updateChannel(t.id, {
-        nextSendAt: t.nextRunAt,
-        status: t.status,
-      });
+      db.updateChannel(
+        t.id,
+        {
+          nextSendAt: t.nextRunAt,
+          status: t.status,
+        },
+        false
+      );
     }
   }
 

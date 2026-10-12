@@ -1,0 +1,8 @@
+{
+  "name": "Discord Autopost Hub",
+  "description": "Platform otomatisasi pengiriman pesan terjadwal ke multi-channel Discord dengan multi-akun User Token terenkripsi, custom delay, dan randomizer.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
